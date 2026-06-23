@@ -508,6 +508,55 @@ def test_update_vectors():
     # endregion
 
 
+def test_update_vectors_filter_skips_only_non_matching_points():
+    local_client = init_local()
+    remote_client = init_remote()
+    vectors_config = models.VectorParams(size=4, distance=models.Distance.DOT)
+    local_client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=vectors_config,
+    )
+    if remote_client.collection_exists(collection_name=COLLECTION_NAME):
+        remote_client.delete_collection(collection_name=COLLECTION_NAME)
+    remote_client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=vectors_config,
+    )
+
+    points = [
+        models.PointStruct(id=1, vector=[1, 0, 0, 0], payload={"type": "a"}),
+        models.PointStruct(id=2, vector=[0, 1, 0, 0], payload={"type": "b"}),
+        models.PointStruct(id=3, vector=[0, 0, 1, 0], payload={"type": "a"}),
+    ]
+    local_client.upsert(COLLECTION_NAME, points=points)
+    remote_client.upsert(COLLECTION_NAME, points=points, wait=True)
+
+    updated_vectors = [
+        models.PointVectors(id=1, vector=[0.5, 0.5, 0, 0]),
+        models.PointVectors(id=2, vector=[0, 0, 0.5, 0.5]),
+        models.PointVectors(id=3, vector=[0, 0, 0, 1]),
+    ]
+    update_filter = models.Filter(
+        must=[models.FieldCondition(key="type", match=models.MatchValue(value="a"))]
+    )
+    local_client.update_vectors(
+        COLLECTION_NAME, points=updated_vectors, update_filter=update_filter
+    )
+    remote_client.update_vectors(
+        COLLECTION_NAME, points=updated_vectors, update_filter=update_filter, wait=True
+    )
+
+    retrieved_points = local_client.retrieve(
+        collection_name=COLLECTION_NAME, ids=[1, 2, 3], with_vectors=True
+    )
+    assert retrieved_points[0].vector == [0.5, 0.5, 0.0, 0.0]
+    assert retrieved_points[1].vector == [0.0, 1.0, 0.0, 0.0]
+    assert retrieved_points[2].vector == [0.0, 0.0, 0.0, 1.0]
+    compare_collections(local_client, remote_client, 3, collection_name=COLLECTION_NAME)
+    local_client.delete_collection(collection_name=COLLECTION_NAME)
+    remote_client.delete_collection(collection_name=COLLECTION_NAME)
+
+
 @pytest.mark.parametrize("prefer_grpc", [False, True])
 def test_update_filter(prefer_grpc):
     local_client = init_local()
